@@ -141,7 +141,7 @@ type Collection struct {
 type Query struct {
 	m       sync.Mutex
 	session *Session
-	query   // Enables default settings in session.
+	query // Enables default settings in session.
 }
 
 type query struct {
@@ -2010,6 +2010,14 @@ func (s *Session) ResetIndexCache() {
 	s.cluster().ResetIndexCache()
 }
 
+//Session Master Conn
+func (s *Session) MasterConn() net.Conn {
+	if s.masterSocket == nil {
+		return nil
+	}
+	return s.masterSocket.conn
+}
+
 // New creates a new session with the same parameters as the original
 // session, including consistency, batch size, prefetching, safety mode,
 // etc. The returned session will use sockets from the pool, so there's
@@ -2912,7 +2920,6 @@ func (p *Pipe) SetMaxTime(d time.Duration) *Pipe {
 	return p
 }
 
-
 // Collation allows to specify language-specific rules for string comparison,
 // such as rules for lettercase and accent marks.
 // When specifying collation, the locale field is mandatory; all other collation
@@ -2939,7 +2946,7 @@ func (p *Pipe) Collation(collation *Collation) *Pipe {
 type LastError struct {
 	Err             string
 	Code, N, Waited int
-	FSyncFiles      int `bson:"fsyncFiles"`
+	FSyncFiles      int         `bson:"fsyncFiles"`
 	WTimeout        bool
 	UpdatedExisting bool        `bson:"updatedExisting"`
 	UpsertedId      interface{} `bson:"upserted"`
@@ -2957,7 +2964,7 @@ type queryError struct {
 	ErrMsg        string
 	Assertion     string
 	Code          int
-	AssertionCode int `bson:"assertionCode"`
+	AssertionCode int    `bson:"assertionCode"`
 }
 
 // QueryError is returned when a query fails
@@ -4638,7 +4645,7 @@ func (c *Collection) Count() (n int, err error) {
 }
 
 type distinctCmd struct {
-	Collection string `bson:"distinct"`
+	Collection string      `bson:"distinct"`
 	Key        string
 	Query      interface{} `bson:",omitempty"`
 }
@@ -4677,10 +4684,10 @@ func (q *Query) Distinct(key string, result interface{}) error {
 }
 
 type mapReduceCmd struct {
-	Collection string `bson:"mapreduce"`
-	Map        string `bson:",omitempty"`
-	Reduce     string `bson:",omitempty"`
-	Finalize   string `bson:",omitempty"`
+	Collection string      `bson:"mapreduce"`
+	Map        string      `bson:",omitempty"`
+	Reduce     string      `bson:",omitempty"`
+	Finalize   string      `bson:",omitempty"`
 	Out        interface{}
 	Query      interface{} `bson:",omitempty"`
 	Sort       interface{} `bson:",omitempty"`
@@ -4727,7 +4734,7 @@ type MapReduceInfo struct {
 
 // MapReduceTime stores execution time of a MapReduce operation
 type MapReduceTime struct {
-	Total    int64 // Total time, in nanoseconds
+	Total    int64                   // Total time, in nanoseconds
 	Map      int64 `bson:"mapTime"`  // Time within map function, in nanoseconds
 	EmitLoop int64 `bson:"emitLoop"` // Time within the emit/map loop, in nanoseconds
 }
@@ -5047,7 +5054,7 @@ type BuildInfo struct {
 	SysInfo        string `bson:"sysInfo"` // Deprecated and empty on MongoDB 3.2+.
 	Bits           int
 	Debug          bool
-	MaxObjectSize  int `bson:"maxBsonObjectSize"`
+	MaxObjectSize  int    `bson:"maxBsonObjectSize"`
 }
 
 // VersionAtLeast returns whether the BuildInfo version is greater than or
@@ -5276,7 +5283,7 @@ type writeCmdResult struct {
 	Ok        bool
 	N         int
 	NModified int `bson:"nModified"`
-	Upserted  []struct {
+	Upserted []struct {
 		Index int
 		Id    interface{} `bson:"_id"`
 	}

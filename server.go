@@ -69,6 +69,7 @@ type mongoServer struct {
 	abended       bool
 	poolWaiter    *sync.Cond
 	dialInfo      *DialInfo
+	acquireCount  int
 }
 
 type dialer struct {
@@ -132,6 +133,15 @@ func (server *mongoServer) AcquireSocketWithBlocking(info *DialInfo) (socket *mo
 	return server.acquireSocketInternal(info, true)
 }
 
+// reduce the require connection count and send out signal
+func (server *mongoServer) reduceAcquireAndSignal() {
+	server.acquireCount --
+	if server.acquireCount < 0 {
+		server.acquireCount = 0
+	}
+	server.poolWaiter.Signal()
+}
+
 func (server *mongoServer) acquireSocketInternal(info *DialInfo, shouldBlock bool) (socket *mongoSocket, abended bool, err error) {
 	for {
 		server.Lock()
@@ -161,12 +171,15 @@ func (server *mongoServer) acquireSocketInternal(info *DialInfo, shouldBlock boo
 							server.Lock()
 							defer server.Unlock()
 							timeoutHit = true
-							server.poolWaiter.Broadcast()
+							// Signal or Broadcast? It's a question.
+							// It seems that use Signal more reasonable because generally the first wait go routine
+							// is early in wait state.
+							server.poolWaiter.Signal()
 						}
 					}()
 				}
 				timeSpentWaiting := time.Duration(0)
-				for len(server.liveSockets)-len(server.unusedSockets) >= info.PoolLimit && !timeoutHit {
+				for server.acquireCount >= info.PoolLimit && !timeoutHit {
 					// We only count time spent in Wait(), and not time evaluating the entire loop,
 					// so that in the happy non-blocking path where the condition above evaluates true
 					// first time, we record a nice round zero wait time.
@@ -185,7 +198,7 @@ func (server *mongoServer) acquireSocketInternal(info *DialInfo, shouldBlock boo
 				// Record that we fetched a connection of of a socket list and how long we spent waiting
 				stats.noticeSocketAcquisition(timeSpentWaiting)
 			} else {
-				if len(server.liveSockets)-len(server.unusedSockets) >= info.PoolLimit {
+				if server.acquireCount >= info.PoolLimit {
 					server.Unlock()
 					return nil, false, errPoolLimit
 				}
@@ -197,12 +210,20 @@ func (server *mongoServer) acquireSocketInternal(info *DialInfo, shouldBlock boo
 			server.unusedSockets[n-1] = nil // Help GC.
 			server.unusedSockets = server.unusedSockets[:n-1]
 			serverInfo := server.info
+			// Add number to occupy first to avoid other go routine enter
+			server.acquireCount ++
 			server.Unlock()
 			err = socket.InitialAcquire(serverInfo, info)
 			if err != nil {
+				// Get fail socket, reduce number
+				server.Lock()
+				server.reduceAcquireAndSignal()
+				server.Unlock()
 				continue
 			}
 		} else {
+			// Add number to occupy first to avoid other go routine enter
+			server.acquireCount ++
 			server.Unlock()
 			socket, err = server.Connect(info)
 			if err == nil {
@@ -211,11 +232,17 @@ func (server *mongoServer) acquireSocketInternal(info *DialInfo, shouldBlock boo
 				// closed in the meantime
 				if server.closed {
 					server.Unlock()
+					//Actually, should call server.reduceAcquireAndSignal here but socket.Release shall call it soon.
 					socket.Release()
 					socket.Close()
 					return nil, abended, errServerClosed
 				}
 				server.liveSockets = append(server.liveSockets, socket)
+				server.Unlock()
+			} else {
+				server.Lock()
+				// new connection failed, reduce acquire count
+				server.reduceAcquireAndSignal()
 				server.Unlock()
 			}
 		}
@@ -307,7 +334,7 @@ func (server *mongoServer) RecycleSocket(socket *mongoSocket) {
 	// that there is always a connection available for replset topology discovery). Thus, once
 	// a connection is returned to the pool, _every_ waiter needs to check if the connection count
 	// is underneath their particular value for poolLimit.
-	server.poolWaiter.Broadcast()
+	server.reduceAcquireAndSignal()
 	server.Unlock()
 }
 
